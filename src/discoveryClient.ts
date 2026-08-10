@@ -144,7 +144,10 @@ export const fetchDiscoveryMenu = async (
     throw new Error(message);
   }
 
-  const url = new URL(menuUrl);
+  // Used as-is rather than through `new URL()`: the menu URL is relative when no
+  // apex can be derived (SSR, tests, the localhost dev proxy), and the URL
+  // constructor rejects relative input. Nothing here needs a parsed URL.
+  const url = menuUrl;
 
   const headers: Record<string, string> = {};
   headers.Authorization = `Bearer ${auth.token}`;
