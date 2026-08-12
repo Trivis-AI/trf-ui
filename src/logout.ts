@@ -43,10 +43,14 @@ export const logout = async (
       method: "POST",
       credentials: "include",
       keepalive: true,
+      // Bounded on purpose. The redirect waits on this call, so without a deadline a
+      // hanging API turns "log out" into a button that visibly does nothing at all.
+      signal: AbortSignal.timeout(5000),
     });
   } catch {
-    // Offline, or the API is down. Still shed everything reachable locally, but the
-    // account cookie outlives this: logout is not complete until the server clears it.
+    // Offline, timed out, or the API is down. Still shed everything reachable locally,
+    // but the account cookie outlives this: logout is not complete until the server
+    // clears it, and the user should be told rather than left assuming they are out.
   }
 
   // Remove all cookies accessible from this domain (covers the whole apex)
