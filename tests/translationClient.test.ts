@@ -261,3 +261,80 @@ test("setLang() fetches a language not loaded yet, once, and keeps the one alrea
   client.setLang("ee");
   assert.equal(client.translate("<trn-save>", "Save"), "Salvesta");
 });
+
+// A page with @trf/ui2 in it: a window that hears trf:org-token, on a staging host.
+async function withWindow(fn: (win: EventTarget) => Promise<void>): Promise<void> {
+  const g = globalThis as { window?: unknown };
+  const original = g.window;
+  const win = Object.assign(new EventTarget(), { location: { hostname: "invoices.trf.is" } });
+  g.window = win;
+  try {
+    await fn(win);
+  } finally {
+    if (typeof original === "undefined") delete g.window;
+    else g.window = original;
+  }
+}
+
+function orgToken(country: string): string {
+  const part = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${part({ alg: "HS256" })}.${part({ o: { c: country, n: "Näide OÜ" } })}.sig`;
+}
+
+function announce(win: EventTarget, token: string): void {
+  win.dispatchEvent(new CustomEvent("trf:org-token", { detail: { slug: "naide", token } }));
+}
+
+test("an org token sets the language by the organisation's country when nobody picked one", async () => {
+  const calls: string[] = [];
+  await withWindow(async (win) => {
+    await withFetch(makeFetchByLang(calls), async () => {
+      const client = new TranslationClient();
+      await client.load();
+      announce(win, orgToken("EE"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(client.getLang(), "ee");
+      assert.equal(client.translate("<trn-save>", "Save"), "Salvesta");
+      // Kept the way a pick is, so the other apps open in it.
+      assert.ok(calls.some((u) => u === "https://trf.is/setlang?lang=ee"));
+      // Only the first token decides.
+      announce(win, orgToken("LV"));
+      assert.equal(client.getLang(), "ee");
+    });
+  });
+});
+
+test("an organisation that still carries the country's name gets its language too", async () => {
+  await withWindow(async (win) => {
+    await withFetch(makeFetchByLang([]), async () => {
+      const client = new TranslationClient();
+      announce(win, orgToken("Latvia"));
+      assert.equal(client.getLang(), "lv");
+    });
+  });
+});
+
+test("a country without a language leaves English, and a later token can still decide", async () => {
+  await withWindow(async (win) => {
+    await withFetch(makeFetchByLang([]), async () => {
+      const client = new TranslationClient();
+      announce(win, orgToken("DE"));
+      assert.equal(client.getLang(), "en");
+      announce(win, orgToken("FI"));
+      assert.equal(client.getLang(), "fi");
+    });
+  });
+});
+
+test("a language the user picked is never replaced by the organisation's", async () => {
+  await withWindow(async (win) => {
+    await withFetch(makeFetchByLang([]), async () => {
+      let client: TranslationClient | undefined;
+      withDocumentCookie("lang=en", () => {
+        client = new TranslationClient();
+      });
+      announce(win, orgToken("EE"));
+      assert.equal(client!.getLang(), "en");
+    });
+  });
+});

@@ -6,6 +6,33 @@ type TranslationsResponse = {
   translations?: Array<{ key: string } & TranslationEntry>;
 };
 
+// The language a user sees until they pick one, by their organisation's country: the org
+// token's o.c, an ISO code. Organisations created before backlogin normalised the field
+// may still carry the English name.
+const COUNTRY_LANGUAGES: Record<string, string> = {
+  EE: "ee", ESTONIA: "ee",
+  LV: "lv", LATVIA: "lv",
+  LT: "lt", LITHUANIA: "lt",
+  ES: "es", SPAIN: "es",
+  FR: "fr", FRANCE: "fr",
+  IT: "it", ITALY: "it",
+  SE: "sv", SWEDEN: "sv",
+  NO: "nb", NORWAY: "nb",
+  DK: "da", DENMARK: "da",
+  FI: "fi", FINLAND: "fi"
+};
+
+function orgLanguage(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+    return COUNTRY_LANGUAGES[String(claims?.o?.c ?? "").trim().toUpperCase()] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export class TranslationClient {
   private map: Map<string, TranslationEntry> = new Map();
   private loaded = false;
@@ -22,7 +49,22 @@ export class TranslationClient {
     const cookie = this.readLangCookie();
     const stored = typeof localStorage !== "undefined" ? localStorage.getItem(TranslationClient.LANG_KEY) : null;
     this.lang = cookie ?? stored ?? lang;
+    // Nobody picked a language yet: the first org token decides, by the organisation's
+    // country. @trf/ui2 announces each token as trf:org-token; the token lives in that
+    // package's per-tab cache and is minted after the page loads, so it is not readable here.
+    if (!cookie && !stored && typeof window !== "undefined") {
+      window.addEventListener("trf:org-token", this.onOrgToken);
+    }
   }
+
+  // The organisation's language is kept the way a pick is (setLang), so every other app and
+  // tab opens in it at once instead of in English until its own token arrives.
+  private onOrgToken = (e: Event): void => {
+    const lang = orgLanguage((e as CustomEvent<{ token?: string }>).detail?.token);
+    if (!lang) return;
+    window.removeEventListener("trf:org-token", this.onOrgToken);
+    this.setLang(lang);
+  };
 
   private readLangCookie(): string | null {
     if (typeof document === "undefined") return null;
