@@ -209,3 +209,55 @@ test("load() survives network failure without throwing", async () => {
   // translate still works, returns defaultText
   assert.equal(client.translate("<trn-any>", "Fallback"), "Fallback");
 });
+
+// One response per ?lang=, the way services narrows each key to that language and English.
+function makeFetchByLang(calls: string[]): typeof fetch {
+  return async (input) => {
+    const url = String(input);
+    calls.push(url);
+    const lang = new URL(url, "https://services-api.trf.is").searchParams.get("lang");
+    const translations = MOCK_TRANSLATIONS.translations.map(({ key, en, ...rest }) => {
+      const row: Record<string, string> = { key, en };
+      const text = (rest as Record<string, string>)[lang ?? ""];
+      if (text) row[lang!] = text;
+      if (lang === "lv" && key === "<trn-save>") row.lv = "Saglabāt";
+      return row;
+    });
+    return new Response(JSON.stringify({ translations }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+}
+
+test("load() asks only for the client's language", async () => {
+  const calls: string[] = [];
+  const client = new TranslationClient("ee");
+  await withFetch(makeFetchByLang(calls), async () => {
+    await client.load();
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /\/v1\/translations\?lang=ee$/);
+  assert.equal(client.translate("<trn-save>", "Save"), "Salvesta");
+});
+
+test("setLang() fetches a language not loaded yet, once, and keeps the one already there", async () => {
+  const calls: string[] = [];
+  const client = new TranslationClient("ee");
+  await withFetch(makeFetchByLang(calls), async () => {
+    await client.load();
+    client.setLang("lv");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    client.setLang("ee");
+    client.setLang("lv");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+  const translationCalls = calls.filter((u) => u.includes("/v1/translations"));
+  assert.deepEqual(
+    translationCalls.map((u) => new URL(u, "https://services-api.trf.is").searchParams.get("lang")),
+    ["ee", "lv"]
+  );
+  assert.equal(client.translate("<trn-save>", "Save"), "Saglabāt");
+  client.setLang("ee");
+  assert.equal(client.translate("<trn-save>", "Save"), "Salvesta");
+});
